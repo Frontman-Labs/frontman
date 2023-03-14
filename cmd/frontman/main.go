@@ -43,9 +43,9 @@ func main() {
 		fmt.Println("failed to initialize logger")
 		os.Exit(1)
 	}
-	
+
 	// Create a new Gateway instance
-	gateway, err := frontman.NewGateway(config, logger)
+	gateway, err := frontman.NewFrontman(config, logger)
 	if err != nil {
 		logger.Fatalf("failed to create gateway: %v", err)
 	}

@@ -2,13 +2,9 @@ global:
   service_type: "yaml"
   services_file: "services.yaml"
 api:
-  addr: "0.0.0.0:8080"
-  ssl:
-    enabled: false
+  addr: "0.0.0.0:8082"
 gateway:
-  addr: "0.0.0.0:8000"
-  ssl:
-    enabled: false
+  addr: "0.0.0.0:8002"
 logging:
   level: "debug"
 plugins:

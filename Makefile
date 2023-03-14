@@ -17,7 +17,7 @@ clean:
 
 # Test target (run all tests)
 test:
-	$(GO) test -v
+	$(GO) test -v ./...
 
 bench:
 	go test -v -bench=. -benchmem

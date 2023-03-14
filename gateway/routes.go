@@ -1,18 +1,11 @@
-package frontman
+package gateway
 
 import (
-	"encoding/json"
-
-	"io"
-	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/Frontman-Labs/frontman/config"
-	"github.com/Frontman-Labs/frontman/plugins"
 	"github.com/Frontman-Labs/frontman/service"
 )
 
@@ -234,116 +227,4 @@ func findBackendService(root *Route, r *http.Request) *service.BackendService {
 	}
 
 	return nil
-}
-
-func gatewayHandler(bs service.ServiceRegistry, plugs []plugins.FrontmanPlugin, conf *config.Config, clients map[string]*http.Client) http.HandlerFunc {
-	// Create a map to store HTTP clients for each backend service
-	var clientLock sync.Mutex
-
-	// Start a goroutine to refresh HTTP connections to each backend service
-	go refreshConnections(bs, clients, &clientLock)
-
-	return func(w http.ResponseWriter, r *http.Request) {
-
-		root := buildRoutes(bs.GetServices())
-		for _, plugin := range plugs {
-			if err := plugin.PreRequest(r, bs, conf); err != nil {
-				log.Printf("Plugin error: %v", err)
-				http.Error(w, err.Error(), err.StatusCode())
-				return
-			}
-		}
-
-		// Find the backend service that matches the request
-		backendService := findBackendService(root, r)
-
-		// If the backend service was not found, return a 404 error
-		if backendService == nil {
-			http.NotFound(w, r)
-			return
-		}
-
-		// Get the upstream target URL for this request
-		upstreamTarget := backendService.GetLoadBalancer().ChooseTarget(backendService.UpstreamTargets)
-
-		var urlPath string
-		if backendService.StripPath {
-			urlPath = strings.TrimPrefix(r.URL.Path, backendService.Path)
-		} else {
-			urlPath = backendService.Path
-		}
-
-		// Create a new target URL with the service path and scheme
-
-		targetURL, err := url.Parse(upstreamTarget + urlPath)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Get or create a new client for this backend service
-		client, err := getClientForBackendService(*backendService, backendService.Name, clients, &clientLock)
-		headers := make(http.Header)
-		// Copy the headers from the original request
-		copyHeaders(headers, r.Header)
-		if backendService.AuthConfig != nil {
-			tokenValidator := backendService.GetTokenValidator()
-			// Backend service has auth config specified
-			claims, err := tokenValidator.ValidateToken(headers.Get("Authorization"))
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusUnauthorized)
-				return
-			}
-			data, err := json.Marshal(claims)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			headers.Add(backendService.GetUserDataHeader(), string(data))
-
-		}
-		// Remove the X-Forwarded-For header to prevent spoofing
-		headers.Del("X-Forwarded-For")
-
-		// Log a message indicating that the request is being sent to the target service
-		log.Printf("Sending request to %s: %s %s", upstreamTarget, r.Method, urlPath)
-
-		// Send the request to the target service using the client with the specified transport
-		resp, err := client.Do(&http.Request{
-			Method:        r.Method,
-			URL:           targetURL,
-			Proto:         r.Proto,
-			ProtoMajor:    r.ProtoMajor,
-			ProtoMinor:    r.ProtoMinor,
-			Header:        headers,
-			Body:          r.Body,
-			ContentLength: r.ContentLength,
-			Host:          targetURL.Host,
-		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			log.Printf("Error sending request: %v\n", err.Error())
-			return
-		}
-
-		defer resp.Body.Close()
-
-		for _, plugin := range plugs {
-			if err := plugin.PostResponse(resp, bs, conf); err != nil {
-				log.Printf("Plugin error: %v", err)
-				http.Error(w, err.Error(), err.StatusCode())
-				return
-			}
-		}
-
-		// Log a message indicating that the response has been received from the target service
-		log.Printf("Response received from %s: %d %s", upstreamTarget, resp.StatusCode, resp.Status)
-
-		// Copy the response headers back to the client
-		copyHeaders(w.Header(), resp.Header)
-
-		// Set the status code and body of the response
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-	}
 }
